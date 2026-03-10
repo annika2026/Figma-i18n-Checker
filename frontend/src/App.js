@@ -383,28 +383,6 @@ function App() {
                   </div>
                 )}
 
-                {/* Text Width Validation Error */}
-                {results.analysis.analysis.widthValidation && results.analysis.analysis.widthValidation.error && (
-                  <div className="analysis-section">
-                    <h4>📏 Text Width Validation</h4>
-                    <div style={{
-                      padding: '12px 16px',
-                      backgroundColor: '#f8d7da',
-                      border: '1px solid #f5c6cb',
-                      borderRadius: '6px',
-                      color: '#721c24',
-                      fontSize: '14px'
-                    }}>
-                      <strong>❌ 文本宽度验证失败:</strong> {results.analysis.analysis.widthValidation.error}
-                      {results.analysis.analysis.widthValidation.details && (
-                        <div style={{ marginTop: '8px', fontSize: '12px', color: '#856404' }}>
-                          {results.analysis.analysis.widthValidation.details}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
                 {/* Text Width Validation Results */}
                 {results.analysis.analysis.widthValidation && !results.analysis.analysis.widthValidation.error && (
                   <div className="analysis-section">

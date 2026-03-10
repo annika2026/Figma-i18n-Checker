@@ -5,7 +5,7 @@
   "outputDirectory": "frontend/build",
   "functions": {
     "api/**/*.js": {
-      "includeFiles": ["backend/**", "node_modules/harfbuzzjs/**"]
+      "includeFiles": "backend/**"
     }
   },
   "rewrites": [
