@@ -1,4 +1,16 @@
-// Vercel Serverless 入口：将 /api/* 请求交给 Express 处理
-const serverless = require('serverless-http');
-const app = require('../../backend/index.js');
-module.exports = serverless(app);
+let handler;
+try {
+  const app = require('../backend/index.js');
+  handler = app;
+} catch (e) {
+  handler = (req, res) => {
+    res.statusCode = 500;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      error: 'Server initialization failed',
+      details: e.message,
+      stack: e.stack
+    }));
+  };
+}
+module.exports = handler;
