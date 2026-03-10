@@ -1,5 +1,15 @@
 // Text width calculation and container validation using precise canvas measurement
-const { createCanvas, registerFont } = require('canvas');
+// canvas 为原生模块，在 Vercel 等 serverless 环境可能不可用，改为可选加载
+let createCanvas, registerFont;
+try {
+  const canvas = require('canvas');
+  createCanvas = canvas.createCanvas;
+  registerFont = canvas.registerFont;
+} catch (e) {
+  createCanvas = null;
+  registerFont = null;
+}
+
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
@@ -7,10 +17,18 @@ const http = require('http');
 
 class TextWidthChecker {
   constructor() {
-    // Create a canvas for text measurement
-    this.canvas = createCanvas(1, 1);
-    this.ctx = this.canvas.getContext('2d');
-    
+    this.noCanvas = !createCanvas;
+    if (this.noCanvas) {
+      this.canvas = null;
+      this.ctx = null;
+      if (process.env.VERCEL) {
+        console.log('[TextWidthChecker] Canvas 不可用，跳过精确宽度校验（Vercel 环境）');
+      }
+    } else {
+      this.canvas = createCanvas(1, 1);
+      this.ctx = this.canvas.getContext('2d');
+    }
+
     // Font fallback map for common Figma fonts
     this.fontFallbacks = {
       'Inter': 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
@@ -27,9 +45,11 @@ class TextWidthChecker {
     // 已注册的字体缓存（避免重复注册）
     this.registeredFonts = new Set();
     
-    // Google Fonts 字体文件缓存目录
-    this.fontCacheDir = path.join(__dirname, '..', '.font-cache');
-    this.ensureFontCacheDir();
+    // Google Fonts 字体文件缓存目录（Vercel 仅 /tmp 可写）
+    this.fontCacheDir = process.env.VERCEL
+      ? path.join('/tmp', '.font-cache')
+      : path.join(__dirname, '..', '.font-cache');
+    if (!this.noCanvas) this.ensureFontCacheDir();
     
     // 字体加载状态缓存（fontFamily -> { loaded: boolean, source: 'system'|'google'|'fallback' }）
     this.fontLoadStatus = new Map();
@@ -637,10 +657,15 @@ class TextWidthChecker {
    * @returns {Promise<Object>} 验证结果
    */
   async validateI18nTexts(textNodes, translations) {
+    if (this.noCanvas) {
+      const summary = { total: 0, valid: 0, overflow: 0, languages: new Set() };
+      return { valid: [], overflow: [], summary, skipped: true, skipReason: '精确宽度校验在此环境不可用（如 Vercel），请本地运行以使用该功能。' };
+    }
+
     // 每次检测开始前清空缓存，确保缓存仅在本次检测内生效
     this.clearCache();
     console.log('[缓存] 新的检测开始，缓存已清空');
-    
+
     const results = {
       valid: [],
       overflow: [],
@@ -800,8 +825,14 @@ class TextWidthChecker {
    * @returns {Object} 格式化的报告
    */
   generateReport(validationResults) {
+    if (validationResults.skipped) {
+      return {
+        skipped: true,
+        message: validationResults.skipReason || '宽度校验未执行'
+      };
+    }
     const { valid, overflow, summary, cacheStats } = validationResults;
-    
+
     return {
       precisionNote: '⚠️ 精度说明：Canvas API测量与Figma渲染引擎可能存在1-2px的差异（约1-2%），这是由于不同渲染引擎、字体版本、亚像素渲染等因素导致的正常现象。',
       summary: {

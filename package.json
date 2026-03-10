@@ -14,7 +14,6 @@
     "install-all": "npm run install-server && npm run install-client"
   },
   "dependencies": {
-    "canvas": "^3.2.0",
     "cors": "^2.8.5",
     "serverless-http": "^3.2.0",
     "csv-parser": "^3.2.0",
@@ -26,5 +25,8 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
+  },
+  "optionalDependencies": {
+    "canvas": "^3.2.0"
   }
 }

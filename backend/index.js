@@ -14,10 +14,12 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Configure multer for file uploads
+// Configure multer for file uploads（Vercel serverless 仅 /tmp 可写）
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const uploadDir = path.join(__dirname, 'uploads');
+    const uploadDir = process.env.VERCEL
+      ? path.join('/tmp', 'figma-i18n-uploads')
+      : path.join(__dirname, 'uploads');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
