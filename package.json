@@ -14,10 +14,10 @@
     "install-all": "npm run install-server && npm run install-client"
   },
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.96",
     "cors": "^2.8.5",
     "csv-parser": "^3.2.0",
     "express": "^4.21.2",
+    "harfbuzzjs": "^0.10.0",
     "multer": "^1.4.5-lts.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
