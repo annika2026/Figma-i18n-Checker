@@ -30,18 +30,17 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-// Routes
-app.get('/', (req, res) => {
+// 路由统一加 /api 前缀，便于 Vercel serverless 下 /api/* 正确命中
+// Routes (with /api prefix for Vercel)
+app.get('/api', (req, res) => {
   res.json({ message: 'Figma i18n Checker Backend API' });
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Test Figma API connection
-app.post('/test-figma', async (req, res) => {
+app.post('/api/test-figma', async (req, res) => {
   try {
     const { figmaApiKey } = req.body;
     
@@ -107,7 +106,7 @@ app.post('/test-figma', async (req, res) => {
 });
 
 // File upload endpoint
-app.post('/upload', upload.single('file'), (req, res) => {
+app.post('/api/upload', upload.single('file'), (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
@@ -138,7 +137,7 @@ app.post('/upload', upload.single('file'), (req, res) => {
 });
 
 // Figma analysis endpoint
-app.post('/analyze-figma', async (req, res) => {
+app.post('/api/analyze-figma', async (req, res) => {
   try {
     const { figmaUrl, figmaApiKey, csvData } = req.body;
 
@@ -164,7 +163,7 @@ app.post('/analyze-figma', async (req, res) => {
 });
 
 // Combined analysis endpoint (Figma + CSV)
-app.post('/analyze', upload.single('file'), async (req, res) => {
+app.post('/api/analyze', upload.single('file'), async (req, res) => {
   try {
     console.log('Received analysis request');
     console.log('Request body:', { 
@@ -237,8 +236,11 @@ app.post('/analyze', upload.single('file'), async (req, res) => {
   }
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/health`);
-});
+// 仅在非 Vercel 环境下启动 listen（Vercel 使用 serverless 入口 api/[[...path]].js）
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/api/health`);
+  });
+}
+module.exports = app;

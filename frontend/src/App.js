@@ -66,7 +66,7 @@ function App() {
     formData.append('file', file);
 
     try {
-      const response = await fetch('/upload', {
+      const response = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
       });
@@ -100,7 +100,7 @@ function App() {
     setApiTestResult(null);
 
     try {
-      const response = await fetch('/test-figma', {
+      const response = await fetch('/api/test-figma', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -148,7 +148,7 @@ function App() {
     formData.append('figmaApiKey', figmaApiKey);
 
     try {
-      const response = await fetch('/analyze', {
+      const response = await fetch('/api/analyze', {
         method: 'POST',
         body: formData,
       });
