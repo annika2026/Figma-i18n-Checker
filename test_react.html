@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>React 前端测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .result { margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 4px; }
+        .overflow-item { background: #f8d7da; border: 1px solid #f5c6cb; padding: 10px; margin: 5px 0; border-radius: 4px; }
+        .valid-item { background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; margin: 5px 0; border-radius: 4px; }
+        .summary { display: flex; gap: 20px; margin-bottom: 20px; }
+        .summary-item { text-align: center; padding: 10px; background: white; border-radius: 4px; }
+        .language-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+        .language-tag { background: #e3f2fd; color: #1976d2; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>React 前端测试 - 溢出详情显示</h1>
+        
+        <div class="form-group">
+            <label>Figma 文件链接:</label>
+            <input type="text" id="figmaUrl" value="https://www.figma.com/design/2HikT4Lh6XZO7o1jsSmAuc/i18n-Test" placeholder="https://www.figma.com/design/...">
+        </div>
+        
+        <div class="form-group">
+            <label>Figma API Key:</label>
+            <input type="password" id="figmaApiKey" value="figd_m8kMENjyFjfegStzn2KPg4CjcALqIlDjn3wDHbRs" placeholder="figd_...">
+        </div>
+        
+        <div class="form-group">
+            <label>CSV 文件:</label>
+            <input type="file" id="csvFile" accept=".csv">
+        </div>
+        
+        <button onclick="testReactAPI()">测试 React 前端</button>
+        
+        <div id="result" class="result" style="display: none;">
+            <h3>测试结果</h3>
+            <div id="summary" class="summary"></div>
+            <div id="languages"></div>
+            <div id="overflowDetails"></div>
+            <div id="validDetails"></div>
+        </div>
+    </div>
+
+    <script>
+        async function testReactAPI() {
+            const figmaUrl = document.getElementById('figmaUrl').value;
+            const figmaApiKey = document.getElementById('figmaApiKey').value;
+            const csvFile = document.getElementById('csvFile').files[0];
+            
+            if (!figmaUrl || !figmaApiKey) {
+                alert('请输入 Figma 文件链接和 API Key');
+                return;
+            }
+            
+            const formData = new FormData();
+            if (csvFile) formData.append('file', csvFile);
+            formData.append('figmaUrl', figmaUrl);
+            formData.append('figmaApiKey', figmaApiKey);
+            
+            try {
+                const response = await fetch('http://localhost:3001/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayReactResults(data);
+                } else {
+                    alert('错误: ' + data.error);
+                }
+            } catch (error) {
+                alert('网络错误: ' + error.message);
+            }
+        }
+        
+        function displayReactResults(data) {
+            const resultDiv = document.getElementById('result');
+            const summaryDiv = document.getElementById('summary');
+            const languagesDiv = document.getElementById('languages');
+            const overflowDiv = document.getElementById('overflowDetails');
+            const validDiv = document.getElementById('validDetails');
+            
+            resultDiv.style.display = 'block';
+            
+            // 显示汇总统计
+            const widthValidation = data.analysis?.analysis?.widthValidation;
+            if (widthValidation) {
+                summaryDiv.innerHTML = `
+                    <div class="summary-item">
+                        <div style="font-size: 24px; font-weight: bold;">${widthValidation.summary?.total || 0}</div>
+                        <div>总检查数</div>
+                    </div>
+                    <div class="summary-item">
+                        <div style="font-size: 24px; font-weight: bold; color: green;">${widthValidation.summary?.valid || 0}</div>
+                        <div>正常</div>
+                    </div>
+                    <div class="summary-item">
+                        <div style="font-size: 24px; font-weight: bold; color: red;">${widthValidation.summary?.overflow || 0}</div>
+                        <div>溢出</div>
+                    </div>
+                    <div class="summary-item">
+                        <div style="font-size: 24px; font-weight: bold; color: blue;">${widthValidation.summary?.successRate || 0}%</div>
+                        <div>成功率</div>
+                    </div>
+                `;
+                
+                // 显示语言列表
+                if (widthValidation.summary?.languages && widthValidation.summary.languages.length > 0) {
+                    languagesDiv.innerHTML = `
+                        <h4>校验语言:</h4>
+                        <div class="language-tags">
+                            ${widthValidation.summary.languages.map(lang => `<span class="language-tag">${lang}</span>`).join('')}
+                        </div>
+                    `;
+                }
+                
+                // 显示溢出问题
+                if (widthValidation.details?.overflow && widthValidation.details.overflow.length > 0) {
+                    overflowDiv.innerHTML = `
+                        <h4 style="color: red;">🚨 文本溢出问题 (${widthValidation.details.overflow.length})</h4>
+                        ${widthValidation.details.overflow.map(item => `
+                            <div class="overflow-item">
+                                <div><strong>键名:</strong> ${item.key}</div>
+                                <div><strong>语言:</strong> ${item.language}</div>
+                                <div><strong>文本:</strong> "${item.text}"</div>
+                                <div><strong>文本宽度:</strong> ${item.width}px</div>
+                                <div><strong>容器宽度:</strong> ${item.container}px</div>
+                                <div><strong>溢出:</strong> <span style="color: red; font-weight: bold;">+${item.overflow}px</span></div>
+                                <div><strong>利用率:</strong> ${item.utilization}</div>
+                            </div>
+                        `).join('')}
+                    `;
+                } else {
+                    overflowDiv.innerHTML = '<h4 style="color: green;">✅ 没有溢出问题</h4>';
+                }
+                
+                // 显示正常文本
+                if (widthValidation.details?.valid && widthValidation.details.valid.length > 0) {
+                    validDiv.innerHTML = `
+                        <h4 style="color: green;">✅ 正常文本 (${widthValidation.details.valid.length})</h4>
+                        ${widthValidation.details.valid.map(item => `
+                            <div class="valid-item">
+                                <div><strong>键名:</strong> ${item.key}</div>
+                                <div><strong>语言:</strong> ${item.language}</div>
+                                <div><strong>文本:</strong> "${item.text}"</div>
+                                <div><strong>宽度:</strong> ${item.width}px / ${item.container}px (${item.utilization})</div>
+                            </div>
+                        `).join('')}
+                    `;
+                }
+            } else {
+                summaryDiv.innerHTML = '<p>没有文本宽度校验数据</p>';
+            }
+        }
+    </script>
+</body>
+</html>

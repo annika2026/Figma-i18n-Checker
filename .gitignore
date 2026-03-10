@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Font cache (字体缓存目录，字体文件较大，不应提交到版本控制)
+.font-cache/
+
+# Build outputs
+frontend/build/
+dist/
+
+# Uploaded files (用户上传的 CSV 等，不提交到仓库)
+backend/uploads/
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp
+
