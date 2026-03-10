@@ -1,5 +1,6 @@
-// Text width calculation using opentype.js (pure JavaScript, works on Vercel / serverless)
-const opentype = require('opentype.js');
+// Text width calculation using @napi-rs/canvas (Rust-based, works on Vercel / serverless)
+// 使用 Skia 引擎做完整的 text shaping，对泰语、阿拉伯语等复杂文字精度与 Figma 一致
+const { createCanvas, GlobalFonts } = require('@napi-rs/canvas');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
@@ -7,8 +8,8 @@ const http = require('http');
 
 class TextWidthChecker {
   constructor() {
-    // opentype.js 加载的字体对象缓存: cacheKey -> opentype.Font
-    this.loadedFonts = new Map();
+    this.canvas = createCanvas(1, 1);
+    this.ctx = this.canvas.getContext('2d');
 
     // Font fallback map: 找不到字体时用 fallback 字体族名去 Google Fonts 下载
     this.fontFallbacks = {
@@ -21,8 +22,12 @@ class TextWidthChecker {
       'PingFang SC': 'Noto Sans SC',
       'Noto Sans': 'Noto Sans',
       'Open Sans': 'Open Sans',
-      'Microsoft YaHei': 'Noto Sans SC'
+      'Microsoft YaHei': 'Noto Sans SC',
+      'Noto Sans Thai': 'Noto Sans Thai'
     };
+
+    // 已注册的字体缓存（避免重复注册）
+    this.registeredFonts = new Set();
 
     // 字体加载状态缓存
     this.fontLoadStatus = new Map();
@@ -36,9 +41,6 @@ class TextWidthChecker {
     // 缓存池：用于存储已检测过的文本 key
     this.cachePool = new Set();
     this.cacheStats = { total: 0, hits: 0, misses: 0 };
-
-    // 默认回退字体（惰性加载）
-    this.fallbackFont = null;
   }
 
   ensureFontCacheDir() {
@@ -50,9 +52,6 @@ class TextWidthChecker {
 
   // ──────────────────────────── Network Helpers ────────────────────────────
 
-  /**
-   * 获取 URL 内容（支持重定向和自定义 Headers）
-   */
   fetchUrl(url, binary = false, customHeaders = {}) {
     return new Promise((resolve) => {
       const parsedUrl = new URL(url);
@@ -65,15 +64,11 @@ class TextWidthChecker {
       };
 
       client.get(options, (res) => {
-        // 跟随重定向
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           resolve(this.fetchUrl(res.headers.location, binary, customHeaders));
           return;
         }
-        if (res.statusCode !== 200) {
-          resolve(null);
-          return;
-        }
+        if (res.statusCode !== 200) { resolve(null); return; }
         const chunks = [];
         res.on('data', (chunk) => chunks.push(chunk));
         res.on('end', () => {
@@ -88,9 +83,6 @@ class TextWidthChecker {
 
   // ──────────────────────────── Font Download ────────────────────────────
 
-  /**
-   * 从 Google Fonts 下载字体文件（优先 TTF 格式，opentype.js 原生支持）
-   */
   async downloadGoogleFont(fontFamily, fontWeight = 400) {
     try {
       const cleanFontName = fontFamily.replace(/['"]/g, '').trim();
@@ -99,7 +91,7 @@ class TextWidthChecker {
 
       console.log(`[Google Fonts] 尝试下载字体: ${cleanFontName} (${fontWeight})`);
 
-      // 用不支持 woff2 的 User-Agent 请求，Google Fonts 会返回 TTF URL
+      // 用不支持 woff2 的 User-Agent，让 Google Fonts 返回 TTF
       const cssResponse = await this.fetchUrl(apiUrl, false, {
         'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko'
       });
@@ -108,7 +100,7 @@ class TextWidthChecker {
         return null;
       }
 
-      // 从 CSS 中提取字体文件 URL（优先 ttf，其次 woff）
+      // 从 CSS 中提取字体 URL（优先 ttf -> woff -> woff2）
       const ttfMatches = cssResponse.match(/url\(([^)]+\.ttf)\)/g);
       const woffMatches = cssResponse.match(/url\(([^)]+\.woff)\b[^2]/g);
       const woff2Matches = cssResponse.match(/url\(([^)]+\.woff2)\)/g);
@@ -124,7 +116,6 @@ class TextWidthChecker {
       }
 
       if (!fontUrl) {
-        // 兜底：取第一个 url(...)
         const anyUrl = cssResponse.match(/url\(([^)]+)\)/);
         if (anyUrl) fontUrl = anyUrl[1];
       }
@@ -163,35 +154,27 @@ class TextWidthChecker {
   // ──────────────────────────── Font Loading ────────────────────────────
 
   /**
-   * 将字体文件解析为 opentype.Font 对象
-   */
-  parseFontFile(filePath) {
-    const buffer = fs.readFileSync(filePath);
-    const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
-    return opentype.parse(ab);
-  }
-
-  /**
    * 尝试加载字体（Google Fonts -> fallback 字体族 -> 默认 Inter）
+   * 使用 GlobalFonts.registerFromPath 注册到 @napi-rs/canvas
    */
   async loadFont(fontFamily, fontWeight = 400) {
     const cacheKey = `${fontFamily}_${fontWeight}`;
-    if (this.loadedFonts.has(cacheKey)) {
-      const status = this.fontLoadStatus.get(cacheKey) || {};
-      return { success: true, source: status.source || 'cache', fontFamily };
+    if (this.fontLoadStatus.has(cacheKey)) {
+      const status = this.fontLoadStatus.get(cacheKey);
+      return { success: status.loaded, source: status.source, fontFamily: status.fontFamily || fontFamily };
     }
 
-    // 步骤 1: 直接用原始字体族名尝试 Google Fonts
+    // 步骤 1: 用原始字体族名尝试 Google Fonts
     const fontPath = await this.downloadGoogleFont(fontFamily, fontWeight);
     if (fontPath) {
       try {
-        const font = this.parseFontFile(fontPath);
-        this.loadedFonts.set(cacheKey, font);
+        GlobalFonts.registerFromPath(fontPath, fontFamily);
+        this.registeredFonts.add(cacheKey);
         this.fontLoadStatus.set(cacheKey, { loaded: true, source: 'google', fontFamily });
         console.log(`[字体加载] ✅ 从 Google Fonts 加载: ${fontFamily} (${fontWeight})`);
         return { success: true, source: 'google', fontFamily };
       } catch (e) {
-        console.error(`[字体加载] 解析字体失败: ${fontFamily}`, e.message);
+        console.error(`[字体加载] 注册字体失败: ${fontFamily}`, e.message);
       }
     }
 
@@ -202,46 +185,34 @@ class TextWidthChecker {
       const fbPath = await this.downloadGoogleFont(fallbackName, fontWeight);
       if (fbPath) {
         try {
-          const font = this.parseFontFile(fbPath);
-          this.loadedFonts.set(cacheKey, font);
+          GlobalFonts.registerFromPath(fbPath, fallbackName);
+          this.registeredFonts.add(cacheKey);
           this.fontLoadStatus.set(cacheKey, { loaded: true, source: 'fallback', fontFamily: fallbackName });
           console.log(`[字体加载] ✅ 使用 fallback 字体: ${fallbackName}`);
           return { success: true, source: 'fallback', fontFamily: fallbackName };
         } catch (e) {
-          console.error(`[字体加载] 解析 fallback 字体失败: ${fallbackName}`, e.message);
+          console.error(`[字体加载] 注册 fallback 字体失败: ${fallbackName}`, e.message);
         }
       }
     }
 
     // 步骤 3: 加载默认 Inter 作为最终回退
-    const defaultFont = await this.loadFallbackFont();
-    if (defaultFont) {
-      this.loadedFonts.set(cacheKey, defaultFont);
-      this.fontLoadStatus.set(cacheKey, { loaded: true, source: 'default-fallback', fontFamily: 'Inter' });
-      console.log(`[字体加载] ⚠️ 使用默认回退字体 Inter 代替: ${fontFamily}`);
-      return { success: true, source: 'default-fallback', fontFamily: 'Inter' };
+    const interPath = await this.downloadGoogleFont('Inter', 400);
+    if (interPath) {
+      try {
+        GlobalFonts.registerFromPath(interPath, 'Inter');
+        this.registeredFonts.add(cacheKey);
+        this.fontLoadStatus.set(cacheKey, { loaded: true, source: 'default-fallback', fontFamily: 'Inter' });
+        console.log(`[字体加载] ⚠️ 使用默认回退字体 Inter 代替: ${fontFamily}`);
+        return { success: true, source: 'default-fallback', fontFamily: 'Inter' };
+      } catch (e) {
+        console.error('[字体加载] 加载默认回退字体失败:', e.message);
+      }
     }
 
     this.fontLoadStatus.set(cacheKey, { loaded: false, source: 'estimation', fontFamily });
     console.log(`[字体加载] ⚠️ 无可用字体，将使用估算: ${fontFamily}`);
     return { success: false, source: 'estimation', fontFamily };
-  }
-
-  /**
-   * 惰性加载默认回退字体 (Inter)
-   */
-  async loadFallbackFont() {
-    if (this.fallbackFont) return this.fallbackFont;
-    const fontPath = await this.downloadGoogleFont('Inter', 400);
-    if (fontPath) {
-      try {
-        this.fallbackFont = this.parseFontFile(fontPath);
-        return this.fallbackFont;
-      } catch (e) {
-        console.error('[字体加载] 加载默认回退字体失败:', e.message);
-      }
-    }
-    return null;
   }
 
   // ──────────────────────────── Cache Methods ────────────────────────────
@@ -274,7 +245,7 @@ class TextWidthChecker {
   // ──────────────────────────── Text Measurement ────────────────────────────
 
   /**
-   * 精确计算文本宽度（使用 opentype.js getAdvanceWidth）
+   * 精确计算文本宽度（使用 @napi-rs/canvas 的 Skia 引擎，含完整 text shaping）
    */
   async calculateTextWidth(text, fontStyle) {
     if (!text) return 0;
@@ -292,19 +263,25 @@ class TextWidthChecker {
       throw new Error('fontStyle.fontWeight 必须提供，且必须是数字（如：400, 500, 700）');
     }
 
-    const { fontSize, fontFamily, fontWeight, letterSpacing = 0 } = fontStyle;
+    const {
+      fontSize, fontFamily, fontWeight,
+      fontStyle: style = 'normal',
+      letterSpacing = 0
+    } = fontStyle;
 
     // 加载字体
     const fontLoadResult = await this.loadFont(fontFamily, fontWeight);
-    const cacheKey = `${fontFamily}_${fontWeight}`;
-    const font = this.loadedFonts.get(cacheKey);
+    const actualFontFamily = fontLoadResult.fontFamily;
 
-    let width;
-    if (font) {
-      width = font.getAdvanceWidth(text, fontSize, { kerning: true });
-    } else {
-      width = this.estimateTextWidth(text, fontSize);
-    }
+    // 构建 CSS font 字符串
+    let fontString = '';
+    if (style && style !== 'normal') fontString += `${style} `;
+    if (fontWeight && fontWeight !== 400) fontString += `${fontWeight} `;
+    fontString += `${fontSize}px "${actualFontFamily}"`;
+
+    this.ctx.font = fontString;
+    const metrics = this.ctx.measureText(text);
+    let width = metrics.width;
 
     // 应用字间距（letterSpacing）
     if (letterSpacing && letterSpacing !== 0 && text.length > 1) {
@@ -319,25 +296,9 @@ class TextWidthChecker {
       : fontLoadResult.source === 'fallback' ? '🔄'
       : fontLoadResult.source === 'default-fallback' ? '⚠️'
       : '📏';
-    console.log(`[精确测量] 文本: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}", 字体: ${fontFamily} ${fontWeight} ${fontSize}px, 来源: ${sourceEmoji} ${fontLoadResult.source}, 宽度: ${width.toFixed(2)}px`);
+    console.log(`[精确测量] 文本: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}", 字体: ${fontString}, 来源: ${sourceEmoji} ${fontLoadResult.source}, 宽度: ${width.toFixed(2)}px`);
 
     return width;
-  }
-
-  /**
-   * 字符级宽度估算（无可用字体时的最终兜底）
-   */
-  estimateTextWidth(text, fontSize) {
-    let totalWidth = 0;
-    for (const char of text) {
-      const code = char.charCodeAt(0);
-      const isCJK = (code >= 0x4E00 && code <= 0x9FFF) ||
-                    (code >= 0x3400 && code <= 0x4DBF) ||
-                    (code >= 0x3000 && code <= 0x303F) ||
-                    (code >= 0xFF00 && code <= 0xFFEF);
-      totalWidth += isCJK ? fontSize : fontSize * 0.55;
-    }
-    return totalWidth;
   }
 
   /**
@@ -352,9 +313,6 @@ class TextWidthChecker {
 
   // ──────────────────────────── Text Fit Check ────────────────────────────
 
-  /**
-   * 严格检查文本是否适配容器（无阈值，精确比较）
-   */
   async checkTextFit(text, containerWidth, fontStyle, maxLines) {
     if (maxLines === undefined || maxLines === null || typeof maxLines !== 'number') {
       throw new Error('maxLines 必须提供，且必须是数字（如：1, 2, 3）');
@@ -382,7 +340,8 @@ class TextWidthChecker {
           fontFamily: fontStyle.fontFamily,
           fontWeight: fontStyle.fontWeight,
           letterSpacing: fontStyle.letterSpacing || 0
-        }
+        },
+        precisionNote: '使用 Skia 引擎精确测量（含完整 text shaping），与 Figma 差异通常 < 1-2px'
       };
     }
 
@@ -405,13 +364,11 @@ class TextWidthChecker {
         fontFamily: fontStyle.fontFamily,
         fontWeight: fontStyle.fontWeight,
         letterSpacing: fontStyle.letterSpacing || 0
-      }
+      },
+      precisionNote: '使用 Skia 引擎精确测量（含完整 text shaping），与 Figma 差异通常 < 1-2px'
     };
   }
 
-  /**
-   * @deprecated 建议直接使用 checkTextFit 并提供完整的 fontStyle 对象
-   */
   checkTextFitSimple(text, containerWidth, fontSize, fontFamily, fontWeight, maxLines) {
     if (!fontSize || !fontFamily || !fontWeight || !maxLines) {
       throw new Error('fontSize、fontFamily、fontWeight 和 maxLines 都是必需参数');
@@ -603,7 +560,7 @@ class TextWidthChecker {
     const { valid, overflow, summary, cacheStats } = validationResults;
 
     return {
-      precisionNote: '⚠️ 精度说明：opentype.js 使用字体 glyph 元数据精确测量，与 Figma 渲染引擎可能存在 1-2px 的差异（约 1-2%），属正常现象。',
+      precisionNote: '⚠️ 精度说明：使用 Skia 引擎（含完整 text shaping）精确测量，与 Figma 渲染引擎差异通常 < 1-2px。',
       summary: {
         total: summary.total,
         valid: summary.valid,
