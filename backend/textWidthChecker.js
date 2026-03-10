@@ -168,7 +168,12 @@ class TextWidthChecker {
 
   async initHarfBuzz() {
     if (this.hb) return;
-    this.hb = await require('harfbuzzjs');
+    const hbjs = require('harfbuzzjs/hbjs.js');
+    const createHB = require('harfbuzzjs/hb.js');
+    const wasmPath = path.join(path.dirname(require.resolve('harfbuzzjs/hb.js')), 'hb.wasm');
+    const wasmBinary = fs.readFileSync(wasmPath);
+    const instance = await createHB({ wasmBinary });
+    this.hb = hbjs(instance);
     console.log('[HarfBuzz] WASM 初始化完成');
   }
 
