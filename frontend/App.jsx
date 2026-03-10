@@ -27,13 +27,20 @@ export default function App() {
         method: "POST",
         body: formData,
       });
-      
-      const data = await res.json();
-      
+
+      const text = await res.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        setError(res.ok ? '响应格式错误' : (text || res.statusText || '服务异常'));
+        return;
+      }
+
       if (res.ok) {
         setResults(data);
       } else {
-        setError(data.error + (data.details ? ': ' + data.details : ''));
+        setError((data.error || '请求失败') + (data.details ? ': ' + data.details : ''));
       }
     } catch (err) {
       setError('网络错误: ' + err.message);

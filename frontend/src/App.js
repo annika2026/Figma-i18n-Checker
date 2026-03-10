@@ -71,7 +71,14 @@ function App() {
         body: formData,
       });
 
-      const data = await response.json();
+      const text = await response.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        setError(response.ok ? 'Invalid response' : (text || response.statusText || 'Server error'));
+        return;
+      }
 
       if (response.ok) {
         setResults(data);
@@ -108,7 +115,15 @@ function App() {
         body: JSON.stringify({ figmaApiKey }),
       });
 
-      const data = await response.json();
+      const text = await response.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        setError(response.ok ? 'Invalid response' : (text || response.statusText || 'Server error'));
+        setApiTestResult(null);
+        return;
+      }
 
       if (response.ok) {
         setApiTestResult(data);
@@ -153,15 +168,19 @@ function App() {
         body: formData,
       });
 
-      const data = await response.json();
+      const text = await response.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        setError(response.ok ? 'Invalid response' : (text || response.statusText || 'Server error'));
+        return;
+      }
 
       if (response.ok) {
         setResults(data);
       } else {
-        setError(data.error || 'Analysis failed');
-        if (data.details) {
-          setError(prev => prev + ': ' + data.details);
-        }
+        setError((data.error || 'Analysis failed') + (data.details ? ': ' + data.details : ''));
       }
     } catch (err) {
       setError('Network error: ' + err.message);
