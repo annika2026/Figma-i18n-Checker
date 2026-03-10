@@ -26,6 +26,16 @@ class TextWidthChecker {
       'Noto Sans Thai': 'Noto Sans Thai'
     };
 
+    // 脚本级回退字体：当文本包含特定脚本字符时，自动加载对应的 fallback 字体
+    this.scriptFallbacks = {
+      thai: ['Noto Sans Thai', 'Sarabun', 'Kanit'],
+      cjk: ['Noto Sans SC', 'Noto Sans JP', 'Noto Sans KR'],
+      arabic: ['Noto Sans Arabic'],
+      devanagari: ['Noto Sans Devanagari']
+    };
+    // 已预加载的脚本回退字体
+    this.preloadedScripts = new Set();
+
     // 已注册的字体缓存（避免重复注册）
     this.registeredFonts = new Set();
 
@@ -154,27 +164,84 @@ class TextWidthChecker {
   // ──────────────────────────── Font Loading ────────────────────────────
 
   /**
-   * 尝试加载字体（Google Fonts -> fallback 字体族 -> 默认 Inter）
-   * 使用 GlobalFonts.registerFromPath 注册到 @napi-rs/canvas
+   * 从 fontPostScriptName 提取字体族名（如 "Kanit-Regular" -> "Kanit"）
    */
-  async loadFont(fontFamily, fontWeight = 400) {
+  extractFontFamilyFromPSName(psName) {
+    if (!psName) return null;
+    // PostScript 名格式通常为 "FontFamily-Style"，如 "Kanit-Regular", "Inter-Bold"
+    const parts = psName.split('-');
+    return parts[0] || null;
+  }
+
+  /**
+   * 检测文本中包含的脚本类型
+   */
+  detectScripts(text) {
+    const scripts = new Set();
+    for (const char of text) {
+      const code = char.codePointAt(0);
+      if (code >= 0x0E00 && code <= 0x0E7F) scripts.add('thai');
+      else if ((code >= 0x4E00 && code <= 0x9FFF) || (code >= 0x3400 && code <= 0x4DBF) ||
+               (code >= 0x3000 && code <= 0x303F)) scripts.add('cjk');
+      else if ((code >= 0x0600 && code <= 0x06FF) || (code >= 0xFE70 && code <= 0xFEFF)) scripts.add('arabic');
+      else if (code >= 0x0900 && code <= 0x097F) scripts.add('devanagari');
+    }
+    return scripts;
+  }
+
+  /**
+   * 为特定脚本预加载 fallback 字体（仅加载一次）
+   */
+  async preloadScriptFallbacks(scripts) {
+    for (const script of scripts) {
+      if (this.preloadedScripts.has(script)) continue;
+      const fallbacks = this.scriptFallbacks[script];
+      if (!fallbacks) continue;
+
+      for (const fbFont of fallbacks) {
+        const fbKey = `${fbFont}_400`;
+        if (this.registeredFonts.has(fbKey)) continue;
+        const fbPath = await this.downloadGoogleFont(fbFont, 400);
+        if (fbPath) {
+          try {
+            GlobalFonts.registerFromPath(fbPath, fbFont);
+            this.registeredFonts.add(fbKey);
+            console.log(`[脚本回退] ✅ 预加载 ${script} 字体: ${fbFont}`);
+          } catch (e) { /* ignore */ }
+        }
+      }
+      this.preloadedScripts.add(script);
+    }
+  }
+
+  /**
+   * 尝试加载字体（精确匹配 -> fontPostScriptName -> Google Fonts -> fallback -> Inter）
+   */
+  async loadFont(fontFamily, fontWeight = 400, fontPostScriptName = null) {
     const cacheKey = `${fontFamily}_${fontWeight}`;
     if (this.fontLoadStatus.has(cacheKey)) {
       const status = this.fontLoadStatus.get(cacheKey);
       return { success: status.loaded, source: status.source, fontFamily: status.fontFamily || fontFamily };
     }
 
-    // 步骤 1: 用原始字体族名尝试 Google Fonts
-    const fontPath = await this.downloadGoogleFont(fontFamily, fontWeight);
-    if (fontPath) {
-      try {
-        GlobalFonts.registerFromPath(fontPath, fontFamily);
-        this.registeredFonts.add(cacheKey);
-        this.fontLoadStatus.set(cacheKey, { loaded: true, source: 'google', fontFamily });
-        console.log(`[字体加载] ✅ 从 Google Fonts 加载: ${fontFamily} (${fontWeight})`);
-        return { success: true, source: 'google', fontFamily };
-      } catch (e) {
-        console.error(`[字体加载] 注册字体失败: ${fontFamily}`, e.message);
+    // 步骤 0: 从 fontPostScriptName 提取可能的字体族名（比 fontFamily 更精确）
+    const psFamily = this.extractFontFamilyFromPSName(fontPostScriptName);
+    const candidates = [fontFamily];
+    if (psFamily && psFamily !== fontFamily) candidates.unshift(psFamily);
+
+    // 步骤 1: 尝试所有候选字体名从 Google Fonts 下载
+    for (const candidate of candidates) {
+      const fontPath = await this.downloadGoogleFont(candidate, fontWeight);
+      if (fontPath) {
+        try {
+          GlobalFonts.registerFromPath(fontPath, candidate);
+          this.registeredFonts.add(cacheKey);
+          this.fontLoadStatus.set(cacheKey, { loaded: true, source: 'google', fontFamily: candidate });
+          console.log(`[字体加载] ✅ 从 Google Fonts 加载: ${candidate} (${fontWeight})`);
+          return { success: true, source: 'google', fontFamily: candidate };
+        } catch (e) {
+          console.error(`[字体加载] 注册字体失败: ${candidate}`, e.message);
+        }
       }
     }
 
@@ -211,7 +278,6 @@ class TextWidthChecker {
     }
 
     this.fontLoadStatus.set(cacheKey, { loaded: false, source: 'estimation', fontFamily });
-    console.log(`[字体加载] ⚠️ 无可用字体，将使用估算: ${fontFamily}`);
     return { success: false, source: 'estimation', fontFamily };
   }
 
@@ -266,19 +332,36 @@ class TextWidthChecker {
     const {
       fontSize, fontFamily, fontWeight,
       fontStyle: style = 'normal',
-      letterSpacing = 0
+      letterSpacing = 0,
+      fontPostScriptName
     } = fontStyle;
 
-    // 加载字体
-    const fontLoadResult = await this.loadFont(fontFamily, fontWeight);
+    // 检测文本中的脚本类型并预加载对应 fallback 字体
+    const scripts = this.detectScripts(text);
+    if (scripts.size > 0) {
+      await this.preloadScriptFallbacks(scripts);
+    }
+
+    // 加载主字体（会利用 fontPostScriptName 做更精确匹配）
+    const fontLoadResult = await this.loadFont(fontFamily, fontWeight, fontPostScriptName);
     const actualFontFamily = fontLoadResult.fontFamily;
 
-    // 构建 CSS font 字符串
-    let fontString = '';
-    if (style && style !== 'normal') fontString += `${style} `;
-    if (fontWeight && fontWeight !== 400) fontString += `${fontWeight} `;
-    fontString += `${fontSize}px "${actualFontFamily}"`;
+    // 构建带回退的复合 CSS font string（始终包含 fontWeight）
+    let fontPrefix = '';
+    if (style && style !== 'normal') fontPrefix += `${style} `;
+    fontPrefix += `${fontWeight} ${fontSize}px`;
 
+    // 主字体 + 脚本级回退字体
+    const families = [`"${actualFontFamily}"`];
+    for (const script of scripts) {
+      const fbs = this.scriptFallbacks[script] || [];
+      for (const fb of fbs) {
+        if (fb !== actualFontFamily) families.push(`"${fb}"`);
+      }
+    }
+    families.push('sans-serif');
+
+    const fontString = `${fontPrefix} ${families.join(', ')}`;
     this.ctx.font = fontString;
     const metrics = this.ctx.measureText(text);
     let width = metrics.width;
