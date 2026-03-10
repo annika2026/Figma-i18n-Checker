@@ -23,7 +23,7 @@ export default function App() {
       formData.append("figmaUrl", figmaUrl);
       formData.append("figmaApiKey", figmaApiKey);
 
-      const res = await fetch("http://localhost:3001/analyze", {
+      const res = await fetch("/analyze", {
         method: "POST",
         body: formData,
       });

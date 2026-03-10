@@ -69,7 +69,7 @@
             formData.append('figmaApiKey', figmaApiKey);
             
             try {
-                const response = await fetch('http://localhost:3001/analyze', {
+                const response = await fetch('/analyze', {
                     method: 'POST',
                     body: formData
                 });
